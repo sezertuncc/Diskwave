@@ -28,9 +28,22 @@ final class SMBMounter {
             try fm.createDirectory(atPath: mountPoint, withIntermediateDirectories: true)
         }
 
+        // Write /etc/nsmb.conf tuning before mount (requires root or existing file)
+        applyNSMBConf()
+
         // //username:password@host:port/share
         let url = "//\(creds.username):\(creds.password)@\(host):\(creds.port)/\(creds.share)"
-        let result = try await runProcess("/sbin/mount_smbfs", args: ["-N", url, mountPoint])
+
+        // rwsize=8388608 → 8 MB read/write chunks (default is 1 MB, macOS cap is 8 MB)
+        // soft             → don't hang forever on network drop
+        // nostreams        → skip AppleDouble / named streams metadata — pure throughput
+        // nolockd          → disable NFS locking daemon overhead
+        let result = try await runProcess("/sbin/mount_smbfs", args: [
+            "-N",
+            "-o", "rwsize=8388608,soft,nostreams,nolockd",
+            url,
+            mountPoint
+        ])
 
         guard result.exitCode == 0 else {
             try? fm.removeItem(atPath: mountPoint)
@@ -39,6 +52,25 @@ final class SMBMounter {
 
         currentMountPath = mountPoint
         return mountPoint
+    }
+
+    // Writes performance tuning to /etc/nsmb.conf.
+    // Runs without admin — only succeeds if the file is already writable or doesn't exist yet
+    // (first-time setup with sudo, subsequent mounts read existing file).
+    private func applyNSMBConf() {
+        let conf = """
+        [default]
+        streams=no
+        notify_off=yes
+        smb_neg=smb2_only
+        smb_neg=smb3_only
+        dir_cache_max_cnt=0
+        """
+        let path = "/etc/nsmb.conf"
+        // Only write if not already tuned by us
+        if let existing = try? String(contentsOfFile: path, encoding: .utf8),
+           existing.contains("notify_off=yes") { return }
+        try? conf.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
     func unmount() async {

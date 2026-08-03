@@ -39,6 +39,21 @@ services:
     command: >
       -u "diskwave;diskwave123"
       -s "diskwave;/mount/diskwave;yes;no;no;diskwave;diskwave;diskwave"
+      -g "socket options = TCP_NODELAY IPTOS_LOWDELAY SO_RCVBUF=131072 SO_SNDBUF=131072"
+      -g "use sendfile = yes"
+      -g "aio read size = 1"
+      -g "aio write size = 1"
+      -g "read raw = yes"
+      -g "write raw = yes"
+      -g "large readwrite = yes"
+      -g "max xmit = 131072"
+      -g "min receivefile size = 16384"
+      -g "strict locking = no"
+      -g "oplocks = yes"
+      -g "level2 oplocks = yes"
+      -g "getwd cache = yes"
+      -g "server min protocol = SMB2"
+      -g "server max protocol = SMB3"
     restart: unless-stopped
 
 volumes:
