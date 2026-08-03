@@ -115,7 +115,6 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
 
         // 3. SMB credentials delivered in PairResponse (no external HTTP fetch needed)
         let creds = SMBCredentials(
-            host: host,
             port: 445,
             share: "diskwave",
             username: pairResp.smbUsername,
@@ -293,10 +292,11 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
                 sec_complete(true)
                 return
             }
-            // Extract DER of the leaf certificate and compare SHA-256
-            let certCount = SecTrustGetCertificateCount(trust as! SecTrust)
+            // sec_trust_t → SecTrust (force cast crashes on macOS 15+)
+            let secTrust: SecTrust = sec_trust_copy_ref(trust).takeRetainedValue()
+            let certCount = SecTrustGetCertificateCount(secTrust)
             guard certCount > 0,
-                  let leaf = SecTrustGetCertificateAtIndex(trust as! SecTrust, 0) else {
+                  let leaf = SecTrustGetCertificateAtIndex(secTrust, 0) else {
                 sec_complete(false)
                 return
             }
