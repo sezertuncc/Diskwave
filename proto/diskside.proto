@@ -1,0 +1,177 @@
+syntax = "proto3";
+
+package diskwave;
+
+option go_package = "github.com/diskwave/server/internal/proto";
+
+// --- Auth ---
+
+message PairRequest {
+  string code = 1;
+}
+
+message PairResponse {
+  string jwt_token = 1;
+  string server_name = 2;
+}
+
+message ConnectRequest {
+  string jwt_token = 1;
+}
+
+message ConnectResponse {
+  bool ok = 1;
+  string error = 2;
+}
+
+// --- Metadata ---
+
+enum FileType {
+  FILE = 0;
+  DIRECTORY = 1;
+  SYMLINK = 2;
+}
+
+message DirEntry {
+  string name = 1;
+  FileType type = 2;
+  int64 size = 3;
+  int64 mtime = 4;
+  uint32 mode = 5;
+}
+
+message StatRequest {
+  string path = 1;
+}
+
+message StatResponse {
+  DirEntry entry = 1;
+  string error = 2;
+}
+
+message ReadDirRequest {
+  string path = 1;
+}
+
+message ReadDirResponse {
+  repeated DirEntry entries = 1;
+  string error = 2;
+}
+
+message MkdirRequest {
+  string path = 1;
+  uint32 mode = 2;
+}
+
+message MkdirResponse {
+  string error = 1;
+}
+
+message MknodRequest {
+  string path = 1;
+  uint32 mode = 2;
+}
+
+message MknodResponse {
+  string error = 1;
+}
+
+message RenameRequest {
+  string old_path = 1;
+  string new_path = 2;
+}
+
+message RenameResponse {
+  string error = 1;
+}
+
+message DeleteRequest {
+  string path = 1;
+}
+
+message DeleteResponse {
+  string error = 1;
+}
+
+message SetSizeRequest {
+  string path = 1;
+  int64 size = 2;
+}
+
+message SetSizeResponse {
+  string error = 1;
+}
+
+// --- Blocks ---
+
+message BlockExistsRequest {
+  string hash = 1;
+}
+
+message BlockExistsResponse {
+  bool exists = 1;
+}
+
+message BlockReadRequest {
+  string path = 1;
+  int64 offset = 2;
+  int64 size = 3;
+}
+
+message BlockReadResponse {
+  bytes data = 1;
+  string error = 2;
+}
+
+message BlockWriteRequest {
+  string path = 1;
+  int64 offset = 2;
+  bytes data = 3;
+}
+
+message BlockWriteResponse {
+  int64 written = 1;
+  string error = 2;
+}
+
+// --- Push Notifications (server → client) ---
+
+message InvalidateRequest {
+  string path = 1;
+}
+
+// --- Message Envelope ---
+
+enum MessageType {
+  PAIR_REQUEST = 0;
+  PAIR_RESPONSE = 1;
+  CONNECT_REQUEST = 2;
+  CONNECT_RESPONSE = 3;
+  STAT_REQUEST = 4;
+  STAT_RESPONSE = 5;
+  READDIR_REQUEST = 6;
+  READDIR_RESPONSE = 7;
+  MKDIR_REQUEST = 8;
+  MKDIR_RESPONSE = 9;
+  MKNOD_REQUEST = 10;
+  MKNOD_RESPONSE = 11;
+  RENAME_REQUEST = 12;
+  RENAME_RESPONSE = 13;
+  DELETE_REQUEST = 14;
+  DELETE_RESPONSE = 15;
+  BLOCK_EXISTS_REQUEST = 16;
+  BLOCK_EXISTS_RESPONSE = 17;
+  BLOCK_READ_REQUEST = 18;
+  BLOCK_READ_RESPONSE = 19;
+  BLOCK_WRITE_REQUEST = 20;
+  BLOCK_WRITE_RESPONSE = 21;
+  INVALIDATE = 22;
+  SET_SIZE_REQUEST = 23;
+  SET_SIZE_RESPONSE = 24;
+}
+
+message Envelope {
+  uint32 request_id = 1;
+  MessageType type = 2;
+  bytes payload = 3;
+}

@@ -1,0 +1,15 @@
+# Go
+server/bin/
+server/diskwave
+*.exe
+
+# macOS
+.DS_Store
+
+# Xcode
+client/*.xcodeproj/xcuserdata/
+client/build/
+client/DerivedData/
+
+# Docker volumes (local dev)
+.docker-volumes/

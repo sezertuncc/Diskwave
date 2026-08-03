@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: diskwave
+      POSTGRES_PASSWORD: diskwave
+      POSTGRES_DB: diskwave
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diskwave"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  samba:
+    image: dperson/samba
+    ports:
+      - "0.0.0.0:445:445"
+      - "0.0.0.0:139:139"
+    environment:
+      - DISKWAVE_SMB_PASSWORD=${DISKWAVE_SMB_PASSWORD:?DISKWAVE_SMB_PASSWORD must be set}
+    volumes:
+      - /opt/diskwave/data:/mount/diskwave
+    command: >
+      -u "diskwave;${DISKWAVE_SMB_PASSWORD}"
+      -s "diskwave;/mount/diskwave;yes;no;no;diskwave;diskwave;diskwave"
+      -g "socket options = TCP_NODELAY IPTOS_LOWDELAY SO_RCVBUF=131072 SO_SNDBUF=131072"
+      -g "use sendfile = yes"
+      -g "aio read size = 1"
+      -g "aio write size = 1"
+      -g "read raw = yes"
+      -g "write raw = yes"
+      -g "large readwrite = yes"
+      -g "max xmit = 131072"
+      -g "min receivefile size = 16384"
+      -g "strict locking = no"
+      -g "oplocks = yes"
+      -g "level2 oplocks = yes"
+      -g "getwd cache = yes"
+      -g "server min protocol = SMB2"
+      -g "server max protocol = SMB3"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

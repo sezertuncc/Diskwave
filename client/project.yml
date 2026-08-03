@@ -1,0 +1,48 @@
+name: DiskWave
+options:
+  bundleIdPrefix: com.diskwave
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "15"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    PRODUCT_NAME: DiskWave
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+    INFOPLIST_FILE: Sources/App/Info.plist
+
+packages:
+  SwiftProtobuf:
+    url: https://github.com/apple/swift-protobuf
+    from: "1.25.0"
+
+targets:
+  DiskWave:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Sources
+        excludes:
+          - "**/*.md"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.diskwave.app
+        INFOPLIST_FILE: Sources/App/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    entitlements:
+      path: Sources/App/DiskWave.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.network.client: true
+        com.apple.security.network.server: false
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.automation.apple-events: true
+    dependencies:
+      - package: SwiftProtobuf
