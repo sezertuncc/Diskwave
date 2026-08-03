@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+trap 'echo "INSTALL FAILED at line $LINENO — command: $BASH_COMMAND" >&2' ERR
+
 INSTALL_DIR="/opt/diskwave"
 BIN="/usr/local/bin/diskwave"
 REPO="https://github.com/sezertuncc/Diskwave"
