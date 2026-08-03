@@ -103,8 +103,8 @@ prompt_smb_password() {
         # Interactive terminal — ask the user
         echo
         echo -e "${BOLD}Set a password for the Samba share${RESET}"
-        echo -e "${dim}  This password is used by the Mac app to mount the disk over SMB.${RESET}"
-        echo -e "${dim}  Min 8 characters. You can retrieve it later with: diskwave smb-password${RESET}"
+        echo -e "${BLUE}  This password is used by the Mac app to mount the disk over SMB.${RESET}"
+        echo -e "${BLUE}  Min 8 characters. Retrieve later with: diskwave smb-password${RESET}"
         echo
         while true; do
             read -rsp "  Password: " SMB_PASSWORD; echo
