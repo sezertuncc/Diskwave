@@ -317,17 +317,16 @@ func (m *Manager) SMBCredsFor(clientID string) SMBCredentials {
 	_, _ = rand.Read(pwBytes)
 	password := hex.EncodeToString(pwBytes)
 
-	// Register the user inside the Samba container:
+	// Register the user inside the Samba container synchronously so credentials
+	// are valid before PairResponse reaches the client.
 	//   printf '%s\n%s\n' <pass> <pass> | smbpasswd -a -s <user>
-	go func(u, p string) {
-		input := fmt.Sprintf("%s\n%s\n", p, p)
-		cmd := exec.Command("docker", "exec", "-i", "diskwave-samba-1",
-			"smbpasswd", "-a", "-s", u)
-		cmd.Stdin = strings.NewReader(input)
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("[auth] warn: could not add samba user %s: %v\n", u, err)
-		}
-	}(username, password)
+	input := fmt.Sprintf("%s\n%s\n", password, password)
+	cmd := exec.Command("docker", "exec", "-i", "diskwave-samba-1",
+		"smbpasswd", "-a", "-s", username)
+	cmd.Stdin = strings.NewReader(input)
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("[auth] warn: could not add samba user %s: %v\n", username, err)
+	}
 
 	creds := SMBCredentials{
 		Port:     445,
