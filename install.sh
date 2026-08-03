@@ -86,11 +86,53 @@ download_compose() {
     success "docker-compose.yml downloaded"
 }
 
+# ── Ask (or generate) SMB password ────────────────────────────────────────────
+prompt_smb_password() {
+    # Reuse existing password on upgrades so Samba shares don't break
+    if [[ -f "${INSTALL_DIR}/.env" ]]; then
+        local existing
+        existing=$(grep -E '^DISKWAVE_SMB_PASSWORD=' "${INSTALL_DIR}/.env" | cut -d'=' -f2- || true)
+        if [[ -n "$existing" ]]; then
+            SMB_PASSWORD="$existing"
+            info "Keeping existing SMB password"
+            return
+        fi
+    fi
+
+    if [[ -t 0 ]]; then
+        # Interactive terminal — ask the user
+        echo
+        echo -e "${BOLD}Set a password for the Samba share${RESET}"
+        echo -e "${dim}  This password is used by the Mac app to mount the disk over SMB.${RESET}"
+        echo -e "${dim}  Min 8 characters. You can retrieve it later with: diskwave smb-password${RESET}"
+        echo
+        while true; do
+            read -rsp "  Password: " SMB_PASSWORD; echo
+            if [[ ${#SMB_PASSWORD} -ge 8 ]]; then
+                read -rsp "  Confirm : " SMB_CONFIRM; echo
+                if [[ "$SMB_PASSWORD" == "$SMB_CONFIRM" ]]; then
+                    break
+                else
+                    warn "Passwords do not match. Try again."
+                fi
+            else
+                warn "Password must be at least 8 characters. Try again."
+            fi
+        done
+        GENERATED_PASSWORD=0
+    else
+        # Non-interactive (piped curl | bash) — generate a cryptographically random password
+        SMB_PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 28 || \
+                       od -An -tx1 /dev/urandom | tr -d ' \n' | head -c 28)
+        GENERATED_PASSWORD=1
+    fi
+}
+
 # ── Write server env file ─────────────────────────────────────────────────────
 write_env() {
     mkdir -p /opt/diskwave/data
     chmod 777 /opt/diskwave/data
-    cat > "${INSTALL_DIR}/.env" << 'ENV'
+    cat > "${INSTALL_DIR}/.env" << ENV
 POSTGRES_URL=postgres://diskwave:diskwave@127.0.0.1:5432/diskwave?sslmode=disable
 REDIS_ADDR=127.0.0.1:6379
 STORAGE_TYPE=local
@@ -98,7 +140,10 @@ LOCAL_STORAGE_DIR=/opt/diskwave/data
 QUIC_PORT=7878
 TCP_PORT=7879
 MGMT_PORT=7880
+DISKWAVE_SMB_PASSWORD=${SMB_PASSWORD}
 ENV
+    chmod 600 "${INSTALL_DIR}/.env"
+    success "Config written to ${INSTALL_DIR}/.env"
 }
 
 # ── Start infrastructure ───────────────────────────────────────────────────────
@@ -162,13 +207,13 @@ EOF
 show_pair_code() {
     info "Waiting for server to be ready..."
     local attempts=0
-    until curl -sf http://127.0.0.1:7880/status >/dev/null 2>&1; do
+    until curl -sfk https://127.0.0.1:7880/status >/dev/null 2>&1; do
         attempts=$((attempts+1))
         [ $attempts -ge 30 ] && { warn "Server not ready yet. Try: diskwave pair-code"; return; }
         sleep 1
     done
 
-    CODE=$(curl -sf http://127.0.0.1:7880/pair-code 2>/dev/null | grep -o '"code":"[^"]*"' | cut -d'"' -f4 || echo "run 'diskwave pair-code'")
+    CODE=$(curl -sfk https://127.0.0.1:7880/pair-code 2>/dev/null | grep -o '"code":"[^"]*"' | cut -d'"' -f4 || echo "run 'diskwave pair-code'")
     echo
     echo -e "${BOLD}┌──────────────────────────────────────┐${RESET}"
     echo -e "${BOLD}│  Pairing Code: ${GREEN}${CODE}${RESET}${BOLD}                  │${RESET}"
@@ -208,12 +253,26 @@ main() {
                 systemctl stop diskwave 2>/dev/null || true
             fi
 
+            prompt_smb_password
             download_compose
             write_env
             start_infra
             build_server
             install_systemd
             show_pair_code
+
+            # If password was auto-generated (non-interactive), show it prominently
+            if [[ "${GENERATED_PASSWORD:-0}" == "1" ]]; then
+                echo
+                echo -e "${YELLOW}${BOLD}┌─────────────────────────────────────────────┐${RESET}"
+                echo -e "${YELLOW}${BOLD}│  SAVE YOUR SMB PASSWORD                     │${RESET}"
+                echo -e "${YELLOW}${BOLD}│                                             │${RESET}"
+                printf  "${YELLOW}${BOLD}│  ${GREEN}%-43s${RESET}${YELLOW}${BOLD}│${RESET}\n" "${SMB_PASSWORD}"
+                echo -e "${YELLOW}${BOLD}│                                             │${RESET}"
+                echo -e "${YELLOW}${BOLD}│  Retrieve later: diskwave smb-password      │${RESET}"
+                echo -e "${YELLOW}${BOLD}└─────────────────────────────────────────────┘${RESET}"
+                echo
+            fi
 
             echo -e "${BOLD}Setup complete!${RESET}"
             echo
