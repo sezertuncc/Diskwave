@@ -12,10 +12,15 @@ DEVLOG.md
 NOTES.md
 TODO.md
 
-# Xcode
+# Xcode & Swift
 client/*.xcodeproj/xcuserdata/
 client/build/
 client/DerivedData/
+client/.build/
+
+# Build outputs
+*.dmg
+server/internal/proto/proto/
 
 # Docker volumes (local dev)
 .docker-volumes/

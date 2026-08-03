@@ -67,13 +67,36 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
         return speed
     }
 
+    // MARK: - Helper to sanitize host
+    private func sanitizeHost(_ rawHost: String) -> (host: String, port: UInt16) {
+        var h = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        if h.hasPrefix("https://") {
+            h = String(h.dropFirst(8))
+        } else if h.hasPrefix("http://") {
+            h = String(h.dropFirst(7))
+        }
+        if let slashIndex = h.firstIndex(of: "/") {
+            h = String(h[..<slashIndex])
+        }
+        var targetPort: UInt16 = 7879
+        if let colonIndex = h.lastIndex(of: ":") {
+            let portStr = String(h[h.index(after: colonIndex)...])
+            if let p = UInt16(portStr) {
+                targetPort = p
+                h = String(h[..<colonIndex])
+            }
+        }
+        return (h, targetPort)
+    }
+
     // MARK: - Connect & Pair
 
     func pair(host: String, code: String) async throws {
-        self.host = host
+        let (cleanHost, targetPort) = sanitizeHost(host)
+        self.host = cleanHost
 
-        let storedPin = Keychain.loadPin(host: host)
-        let conn = try await openConnection(host: host, port: 7879, expectedPin: storedPin)
+        let storedPin = Keychain.loadPin(host: cleanHost)
+        let conn = try await openConnection(host: cleanHost, port: targetPort, expectedPin: storedPin)
         self.connection = conn
         startReceiving(conn)
 
@@ -94,7 +117,7 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
 
         // Store cert fingerprint on first pairing; verify on reconnects (handled in openConnection)
         if storedPin == nil, !pairResp.certFingerprint.isEmpty {
-            Keychain.savePin(host: host, fingerprint: pairResp.certFingerprint)
+            Keychain.savePin(host: cleanHost, fingerprint: pairResp.certFingerprint)
             self.certFingerprint = pairResp.certFingerprint
         } else {
             self.certFingerprint = storedPin ?? pairResp.certFingerprint
@@ -123,7 +146,7 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
         self.smbCredentials = creds
 
         // 4. Open a second TLS connection dedicated to the SMB tunnel
-        try await openSMBTunnel(host: host, jwtToken: pairResp.jwtToken, creds: creds)
+        try await openSMBTunnel(host: cleanHost, port: targetPort, jwtToken: pairResp.jwtToken, creds: creds)
     }
 
     func disconnect() {
@@ -140,9 +163,12 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
 
     /// Opens a dedicated TLS connection to the server, sends TUNNEL_OPEN, then
     /// starts a localhost TCP listener. SMBMounter mounts smb://127.0.0.1:<smbLocalPort>/diskwave.
-    private func openSMBTunnel(host: String, jwtToken: String, creds: SMBCredentials) async throws {
+    private func openSMBTunnel(host: String, port: UInt16, jwtToken: String, creds: SMBCredentials) async throws {
         let storedPin = Keychain.loadPin(host: host)
-        let tunnelConn = try await openConnection(host: host, port: 7879, expectedPin: storedPin)
+        let tunnelConn = try await openConnection(host: host, port: port, expectedPin: storedPin)
+
+        // Start receive loop BEFORE RPCs so response continuations fire properly!
+        startReceiving(tunnelConn)
 
         // Authenticate
         let connectReq = Diskwave_ConnectRequest.with { $0.jwtToken = jwtToken }
@@ -153,9 +179,6 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
             responseType: Diskwave_ConnectResponse.self
         )
         guard connectResp.ok else { throw DiskWaveError.connectionFailed }
-
-        // Start the receive loop on tunnel connection so RPC continuations fire
-        startReceiving(tunnelConn)
 
         // Request tunnel
         let tunnelReq = Diskwave_TunnelOpenRequest()
@@ -286,6 +309,7 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
             port: NWEndpoint.Port(rawValue: port) ?? 7879
         )
         let tlsOptions = NWProtocolTLS.Options()
+        sec_protocol_options_add_tls_application_protocol(tlsOptions.securityProtocolOptions, "diskwave-tcp")
         sec_protocol_options_set_verify_block(tlsOptions.securityProtocolOptions, { metadata, trust, sec_complete in
             guard let pin = expectedPin else {
                 // First connection (no stored pin yet): accept and let pairing store the fingerprint
@@ -399,18 +423,27 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
 
     private func receiveFrame(_ conn: NWConnection) {
         // Read 4-byte length prefix
-        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, _, error in
-            guard let self, error == nil, let data, data.count == 4 else { return }
+        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self, weak conn] data, _, _, error in
+            guard let self, let conn, error == nil, let data, data.count == 4 else { return }
             let length = data.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
             guard length > 0, length < 64 * 1024 * 1024 else { self.receiveFrame(conn); return }
 
             conn.receive(minimumIncompleteLength: Int(length), maximumLength: Int(length)) { payload, _, _, err in
                 guard err == nil, let payload else { return }
+                var isTunnelOpenResponse = false
                 do {
                     let env = try Diskwave_Envelope(serializedBytes: [UInt8](payload))
+                    if env.type == .tunnelOpenResponse {
+                        isTunnelOpenResponse = true
+                    }
                     self.dispatchResponse(reqID: env.requestID, rawPayload: payload)
                 } catch {}
-                self.receiveFrame(conn)
+
+                // If this response was for TUNNEL_OPEN_RESPONSE, stop the receive loop so
+                // pipeTunnelConnection can claim raw byte ownership of tunnelConn without interference.
+                if !isTunnelOpenResponse {
+                    self.receiveFrame(conn)
+                }
             }
         }
     }

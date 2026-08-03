@@ -156,13 +156,14 @@ final class PairingViewModel: ObservableObject {
     @Published var errorMessage: String? = nil
 
     func connect() async {
-        guard pairingCode.count == 6, !serverAddress.isEmpty else { return }
+        let cleanAddress = serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard pairingCode.count == 6, !cleanAddress.isEmpty else { return }
         isConnecting = true
         errorMessage = nil
         do {
             let client = QUICClient()
-            try await client.pair(host: serverAddress, code: pairingCode)
-            AppState.shared.setConnected(host: serverAddress, client: client)
+            try await client.pair(host: cleanAddress, code: pairingCode)
+            AppState.shared.setConnected(host: client.host, client: client)
         } catch {
             withAnimation { errorMessage = describe(error) }
         }
