@@ -34,16 +34,9 @@ final class SMBMounter {
         // //username:password@host:port/share
         let url = "//\(creds.username):\(creds.password)@\(host):\(creds.port)/\(creds.share)"
 
-        // rwsize=8388608 → 8 MB read/write chunks (default is 1 MB, macOS cap is 8 MB)
-        // soft             → don't hang forever on network drop
-        // nostreams        → skip AppleDouble / named streams metadata — pure throughput
-        // nolockd          → disable NFS locking daemon overhead
-        let result = try await runProcess("/sbin/mount_smbfs", args: [
-            "-N",
-            "-o", "rwsize=8388608,soft,nostreams,nolockd",
-            url,
-            mountPoint
-        ])
+        // mount_smbfs on modern macOS does not accept -o tuning flags.
+        // All perf tuning lives in /etc/nsmb.conf (written by applyNSMBConf above).
+        let result = try await runProcess("/sbin/mount_smbfs", args: ["-N", url, mountPoint])
 
         guard result.exitCode == 0 else {
             try? fm.removeItem(atPath: mountPoint)
