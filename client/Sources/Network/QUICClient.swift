@@ -1,6 +1,8 @@
 import Foundation
 import Network
 import Security
+import SwiftProtobuf
+import CommonCrypto
 
 // MARK: - QUICClient
 // Phase 3: gerçek TCP + protobuf bağlantısı.
@@ -111,8 +113,14 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
             throw DiskWaveError.connectionFailed
         }
 
-        // 3. Fetch SMB credentials via mgmt HTTPS API
-        let creds = try await fetchSMBCredentials(host: host, jwtToken: pairResp.jwtToken)
+        // 3. SMB credentials delivered in PairResponse (no external HTTP fetch needed)
+        let creds = SMBCredentials(
+            host: host,
+            port: 445,
+            share: "diskwave",
+            username: pairResp.smbUsername,
+            password: pairResp.smbPassword
+        )
         self.smbCredentials = creds
 
         // 4. Open a second TLS connection dedicated to the SMB tunnel
@@ -146,6 +154,9 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
             responseType: Diskwave_ConnectResponse.self
         )
         guard connectResp.ok else { throw DiskWaveError.connectionFailed }
+
+        // Start the receive loop on tunnel connection so RPC continuations fire
+        startReceiving(tunnelConn)
 
         // Request tunnel
         let tunnelReq = Diskwave_TunnelOpenRequest()
@@ -202,27 +213,6 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
         }
         forward(from: local, to: remote)
         forward(from: remote, to: local)
-    }
-
-    // MARK: - SMB credentials exchange
-
-    /// Fetches Samba mount credentials from the management API (localhost-only port 7880, HTTPS).
-    private func fetchSMBCredentials(host: String, jwtToken: String) async throws -> SMBCredentials {
-        guard let url = URL(string: "https://\(host):7880/smb-credentials") else {
-            throw DiskWaveError.connectionFailed
-        }
-        var request = URLRequest(url: url, timeoutInterval: 10)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(jwtToken)", forHTTPHeaderField: "Authorization")
-
-        // mgmt API uses a self-signed ephemeral cert; trust it explicitly since
-        // we are already authenticated via JWT on a private/VPN network.
-        let session = URLSession(configuration: .default, delegate: SelfSignedDelegate(), delegateQueue: nil)
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw DiskWaveError.connectionFailed
-        }
-        return try JSONDecoder().decode(SMBCredentials.self, from: data)
     }
 
     // MARK: - Synchronous RPC wrappers (for FUSE callbacks on non-async context)
@@ -472,10 +462,6 @@ struct RPCError: Error, LocalizedError {
     var errorDescription: String? { message }
 }
 
-// SwiftProtobuf import shim (already imported via diskwave.pb.swift)
-import SwiftProtobuf
-import CommonCrypto
-
 // MARK: - Keychain helpers for cert pinning
 
 enum Keychain {
@@ -514,22 +500,4 @@ enum Keychain {
     }
 }
 
-// MARK: - Self-signed TLS delegate (mgmt API only)
 
-/// Accepts the self-signed certificate emitted by the mgmt server at startup.
-/// Scope is intentionally narrow: only used for the /smb-credentials fetch,
-/// not for any other network traffic.
-private final class SelfSignedDelegate: NSObject, URLSessionDelegate {
-    func urlSession(
-        _ session: URLSession,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        completionHandler(.useCredential, URLCredential(trust: trust))
-    }
-}

@@ -54,11 +54,14 @@ func (d *Dispatcher) HandlePair(env *pb.Envelope, remoteAddr string) *pb.Envelop
 	if err != nil {
 		return fail()
 	}
+	creds := d.AuthMgr.SMBCredsFor(clientID)
 	d.AuthMgr.RecordPairSuccess(remoteAddr)
 	return MakeEnvelope(env.RequestId, pb.MessageType_PAIR_RESPONSE, &pb.PairResponse{
 		JwtToken:        token,
 		ServerName:      "Diskwave",
 		CertFingerprint: d.CertFingerprint,
+		SmbUsername:     creds.Username,
+		SmbPassword:     creds.Password,
 	})
 }
 

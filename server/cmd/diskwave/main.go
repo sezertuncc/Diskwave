@@ -99,14 +99,22 @@ var (
 type menuItem struct {
 	label string
 	icon  string
-	fn    func() string // returns output text
+	fn    func() string // nil = handled specially (e.g. clients sub-screen)
+}
+
+// clientsView is the interactive "Connected Clients" sub-screen.
+type clientsView struct {
+	clients []ClientRecord
+	cursor  int
+	msg     string // feedback line after an action
 }
 
 type model struct {
-	items    []menuItem
-	cursor   int
-	output   string
-	quitting bool
+	items       []menuItem
+	cursor      int
+	output      string
+	quitting    bool
+	clientsView *clientsView // non-nil while the clients sub-screen is active
 }
 
 func newModel() model {
@@ -114,7 +122,7 @@ func newModel() model {
 		items: []menuItem{
 			{"Status", "◉", cmdStatus},
 			{"Pair Code", "⟨⟩", cmdPairCode},
-			{"Connected Clients", "⌁", cmdClients},
+			{"Connected Clients", "⌁", nil}, // opens interactive sub-screen
 			{"Restart Server", "↺", cmdRestart},
 			{"Quit", "×", nil},
 		},
@@ -126,6 +134,43 @@ func (m model) Init() tea.Cmd { return nil }
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// ── Clients sub-screen ──────────────────────────────────────────
+		if m.clientsView != nil {
+			cv := m.clientsView
+			switch msg.String() {
+			case "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			case "esc", "q", "backspace":
+				m.clientsView = nil
+			case "up", "k":
+				if cv.cursor > 0 {
+					cv.cursor--
+					cv.msg = ""
+				}
+			case "down", "j":
+				if cv.cursor < len(cv.clients)-1 {
+					cv.cursor++
+					cv.msg = ""
+				}
+			case "enter", " ":
+				if len(cv.clients) == 0 {
+					break
+				}
+				id := cv.clients[cv.cursor].ID
+				if err := apiDelete("/clients/" + id); err != nil {
+					cv.msg = styleRed.Render("✗  " + err.Error())
+				} else {
+					// Refresh list after unpair
+					var updated []ClientRecord
+					_ = apiGet("/clients", &updated)
+					m.clientsView = &clientsView{clients: updated, msg: styleGreen.Render("✓  Unpaired")}
+				}
+			}
+			return m, nil
+		}
+
+		// ── Main menu ───────────────────────────────────────────────────
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -144,11 +189,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter", " ":
 			item := m.items[m.cursor]
-			if item.fn == nil {
+			switch item.label {
+			case "Quit":
 				m.quitting = true
 				return m, tea.Quit
+			case "Connected Clients":
+				var cs []ClientRecord
+				if err := apiGet("/clients", &cs); err != nil {
+					m.output = styleRed.Render("✗  " + err.Error())
+				} else {
+					m.clientsView = &clientsView{clients: cs}
+					m.output = ""
+				}
+			default:
+				if item.fn != nil {
+					m.output = item.fn()
+				}
 			}
-			m.output = item.fn()
 		}
 	}
 	return m, nil
@@ -159,6 +216,43 @@ func (m model) View() string {
 		return ""
 	}
 
+	// ── Clients sub-screen ──────────────────────────────────────────────
+	if cv := m.clientsView; cv != nil {
+		var sb strings.Builder
+		sb.WriteString(styleHeader.Render("  Connected Clients"))
+		sb.WriteString("\n")
+		if len(cv.clients) == 0 {
+			sb.WriteString(styleDim.Render("  No clients connected."))
+		} else {
+			for i, cl := range cv.clients {
+				short := cl.ID
+				if len(short) > 16 {
+					short = short[:16] + "…"
+				}
+				line := fmt.Sprintf("%s  %s",
+					short,
+					styleDim.Render(cl.ConnectedAt.Local().Format("02 Jan 15:04")),
+				)
+				if i == cv.cursor {
+					sb.WriteString(styleSelected.Render("  ✂  " + line))
+				} else {
+					sb.WriteString(styleNormal.Render(styleDim.Render("     " + line)))
+				}
+				sb.WriteString("\n")
+			}
+		}
+		sb.WriteString("\n")
+		sb.WriteString(styleDim.Render("  ↑↓ navigate   enter unpair   esc back"))
+		sb.WriteString("\n")
+		if cv.msg != "" {
+			sb.WriteString("\n")
+			sb.WriteString(styleBorder.Render(cv.msg))
+			sb.WriteString("\n")
+		}
+		return sb.String()
+	}
+
+	// ── Main menu ───────────────────────────────────────────────────────
 	var sb strings.Builder
 
 	sb.WriteString(styleHeader.Render("  Diskwave  Server Control"))
@@ -220,31 +314,6 @@ func cmdPairCode() string {
 		out += "\n" + styleDim.Render("Expires: "+p.Expires)
 	}
 	return out
-}
-
-func cmdClients() string {
-	var cs []ClientRecord
-	if err := apiGet("/clients", &cs); err != nil {
-		return styleRed.Render("✗  " + err.Error())
-	}
-	if len(cs) == 0 {
-		return styleDim.Render("No clients connected.")
-	}
-	var sb strings.Builder
-	sb.WriteString(styleBold.Render("Connected Clients") + "\n\n")
-	for i, cl := range cs {
-		short := cl.ID
-		if len(short) > 16 {
-			short = short[:16] + "…"
-		}
-		sb.WriteString(fmt.Sprintf("  %s  %s  %s\n",
-			styleCyan.Render(fmt.Sprintf("[%d]", i+1)),
-			short,
-			styleDim.Render(cl.ConnectedAt.Local().Format("02 Jan 15:04")),
-		))
-	}
-	sb.WriteString("\n" + styleDim.Render("Use: diskwave unpair <id>  to disconnect a client."))
-	return sb.String()
 }
 
 func cmdRestart() string {

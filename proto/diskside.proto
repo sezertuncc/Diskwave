@@ -14,6 +14,8 @@ message PairResponse {
   string jwt_token = 1;
   string server_name = 2;
   string cert_fingerprint = 3; // SHA-256 hex of server TLS cert, for pinning
+  string smb_username = 4;     // per-device Samba username
+  string smb_password = 5;     // per-device Samba password
 }
 
 // --- SMB Tunnel ---
