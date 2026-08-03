@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: diskwave
+      POSTGRES_PASSWORD: diskwave
+      POSTGRES_DB: diskwave
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diskwave"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  samba:
+    image: dperson/samba
+    ports:
+      - "127.0.0.1:445:445"
+      - "127.0.0.1:139:139"
+    volumes:
+      - diskwave_data:/mount/diskwave
+    command: >
+      -u "diskwave;diskwave123"
+      -s "diskwave;/mount/diskwave;yes;no;no;diskwave"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  diskwave_data:
