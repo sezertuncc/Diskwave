@@ -89,6 +89,7 @@ download_compose() {
 # ── Write server env file ─────────────────────────────────────────────────────
 write_env() {
     mkdir -p /opt/diskwave/data
+    chmod 777 /opt/diskwave/data
     cat > "${INSTALL_DIR}/.env" << 'ENV'
 POSTGRES_URL=postgres://diskwave:diskwave@127.0.0.1:5432/diskwave?sslmode=disable
 REDIS_ADDR=127.0.0.1:6379

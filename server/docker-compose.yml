@@ -38,7 +38,7 @@ services:
       - /opt/diskwave/data:/mount/diskwave
     command: >
       -u "diskwave;diskwave123"
-      -s "diskwave;/mount/diskwave;yes;no;no;diskwave"
+      -s "diskwave;/mount/diskwave;yes;no;no;diskwave;diskwave;diskwave"
     restart: unless-stopped
 
 volumes:
