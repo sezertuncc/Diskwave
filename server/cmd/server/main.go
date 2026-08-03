@@ -13,8 +13,9 @@ import (
 	dsquic "github.com/diskwave/server/internal/quic"
 	"github.com/diskwave/server/internal/storage"
 	dstcp "github.com/diskwave/server/internal/tcp"
-	"github.com/redis/go-redis/v9"
+	"github.com/diskwave/server/internal/tlsutil"
 	_ "github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -102,11 +103,21 @@ func main() {
 		}
 	}()
 
+	// --- TLS cert (persisted in DB so fingerprint survives restarts) ---
+	tlsConf, err := tlsutil.LoadOrCreate(db)
+	if err != nil {
+		log.Fatalf("tls cert: %v", err)
+	}
+	tcpTLSConf := tlsConf.Clone()
+	tcpTLSConf.NextProtos = []string{"diskwave-tcp"}
+	quicTLSConf := tlsConf.Clone()
+	quicTLSConf.NextProtos = []string{"diskwave-quic"}
+
 	// --- TCP server (for Swift client pairing) ---
 	tcpHandler := dstcp.NewHandler(authMgr, metaSvc, blockSvc)
 	tcpAddr := fmt.Sprintf("0.0.0.0:%s", cfg.tcpPort)
 	go func() {
-		if err := tcpHandler.ListenAndServe(tcpAddr); err != nil {
+		if err := tcpHandler.ListenAndServe(tcpAddr, tcpTLSConf); err != nil {
 			log.Fatalf("[tcp] %v", err)
 		}
 	}()
@@ -114,7 +125,7 @@ func main() {
 	// --- QUIC server ---
 	handler := dsquic.NewHandler(authMgr, metaSvc, blockSvc)
 	addr := fmt.Sprintf("0.0.0.0:%s", cfg.quicPort)
-	log.Fatalf("[quic] %v", handler.ListenAndServe(addr))
+	log.Fatalf("[quic] %v", handler.ListenAndServe(addr, quicTLSConf))
 }
 
 type config struct {

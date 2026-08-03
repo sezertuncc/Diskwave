@@ -8,25 +8,65 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
 	"time"
 )
 
-// GenerateSelfSigned creates an ephemeral ECDSA P-256 self-signed cert valid
-// for 10 years. Suitable for both QUIC and TLS-wrapped TCP transports where
-// the client explicitly trusts this specific cert (pin or InsecureSkipVerify
-// on a private network).
-func GenerateSelfSigned(nextProtos ...string) (*tls.Config, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+// LoadOrCreate loads the TLS cert+key from the database, or generates a new
+// one and persists it. This ensures the cert fingerprint stays stable across
+// server restarts — client cert pins remain valid after upgrades.
+func LoadOrCreate(db *sql.DB, nextProtos ...string) (*tls.Config, error) {
+	// Ensure table exists
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS diskwave_tls (
+		id      TEXT PRIMARY KEY,
+		cert_pem TEXT NOT NULL,
+		key_pem  TEXT NOT NULL
+	)`)
 	if err != nil {
 		return nil, err
 	}
 
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	var certPEM, keyPEM string
+	err = db.QueryRow(`SELECT cert_pem, key_pem FROM diskwave_tls WHERE id = 'server'`).Scan(&certPEM, &keyPEM)
+	if err == nil {
+		// Loaded from DB
+		tlsCert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+		if err != nil {
+			return nil, err
+		}
+		return &tls.Config{
+			Certificates: []tls.Certificate{tlsCert},
+			NextProtos:   nextProtos,
+			MinVersion:   tls.VersionTLS13,
+		}, nil
+	}
+
+	// Not found — generate and persist
+	cfg, certPEMBytes, keyPEMBytes, err := generateRaw(nextProtos...)
 	if err != nil {
 		return nil, err
+	}
+	_, err = db.Exec(`INSERT INTO diskwave_tls (id, cert_pem, key_pem) VALUES ('server', $1, $2)`,
+		string(certPEMBytes), string(keyPEMBytes))
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// generateRaw creates a fresh self-signed cert and returns the config plus raw PEM bytes.
+func generateRaw(nextProtos ...string) (*tls.Config, []byte, []byte, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	template := x509.Certificate{
@@ -40,12 +80,12 @@ func GenerateSelfSigned(nextProtos ...string) (*tls.Config, error) {
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	keyBytes, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
@@ -53,14 +93,22 @@ func GenerateSelfSigned(nextProtos ...string) (*tls.Config, error) {
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
-	return &tls.Config{
+	cfg := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		NextProtos:   nextProtos,
 		MinVersion:   tls.VersionTLS13,
-	}, nil
+	}
+	return cfg, certPEM, keyPEM, nil
+}
+
+// GenerateSelfSigned creates an ephemeral self-signed cert (not persisted).
+// Use for localhost-only services like the mgmt API where pinning is not needed.
+func GenerateSelfSigned(nextProtos ...string) (*tls.Config, error) {
+	cfg, _, _, err := generateRaw(nextProtos...)
+	return cfg, err
 }
 
 // CertFingerprint returns the SHA-256 hex fingerprint of the first certificate

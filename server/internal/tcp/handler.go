@@ -57,12 +57,7 @@ func (h *Handler) BroadcastInvalidate(path string) {
 	}
 }
 
-func (h *Handler) ListenAndServe(addr string) error {
-	tlsConf, err := tlsutil.GenerateSelfSigned("diskwave-tcp")
-	if err != nil {
-		return fmt.Errorf("tcp tls config: %w", err)
-	}
-
+func (h *Handler) ListenAndServe(addr string, tlsConf *tls.Config) error {
 	h.disp.CertFingerprint = tlsutil.CertFingerprint(tlsConf)
 
 	ln, err := tls.Listen("tcp", addr, tlsConf)

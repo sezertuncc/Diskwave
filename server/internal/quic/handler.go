@@ -2,6 +2,7 @@ package quic
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -14,7 +15,6 @@ import (
 	"github.com/diskwave/server/internal/dispatch"
 	"github.com/diskwave/server/internal/metadata"
 	pb "github.com/diskwave/server/internal/proto"
-	"github.com/diskwave/server/internal/tlsutil"
 	quiclib "github.com/quic-go/quic-go"
 	"google.golang.org/protobuf/proto"
 )
@@ -65,12 +65,7 @@ func (h *Handler) BroadcastInvalidate(path string) {
 	}
 }
 
-func (h *Handler) ListenAndServe(addr string) error {
-	tlsConf, err := tlsutil.GenerateSelfSigned("diskwave-quic")
-	if err != nil {
-		return fmt.Errorf("tls config: %w", err)
-	}
-
+func (h *Handler) ListenAndServe(addr string, tlsConf *tls.Config) error {
 	listener, err := quiclib.ListenAddr(addr, tlsConf, &quiclib.Config{
 		MaxIdleTimeout:  30 * time.Second,
 		KeepAlivePeriod: 10 * time.Second,
