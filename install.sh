@@ -88,18 +88,14 @@ download_compose() {
 
 # ── Write server env file ─────────────────────────────────────────────────────
 write_env() {
+    mkdir -p /opt/diskwave/data
     cat > "${INSTALL_DIR}/.env" << 'ENV'
 POSTGRES_URL=postgres://diskwave:diskwave@127.0.0.1:5432/diskwave?sslmode=disable
 REDIS_ADDR=127.0.0.1:6379
-STORAGE_TYPE=minio
-MINIO_ENDPOINT=127.0.0.1:9000
-MINIO_ACCESS_KEY=diskwave
-MINIO_SECRET_KEY=diskwave123
-MINIO_BUCKET=diskwave
-MINIO_USE_SSL=false
+STORAGE_TYPE=local
+LOCAL_STORAGE_DIR=/opt/diskwave/data
 QUIC_PORT=7878
 TCP_PORT=7879
-WEBDAV_PORT=7881
 MGMT_PORT=7880
 ENV
 }
@@ -109,9 +105,9 @@ start_infra() {
     info "Starting infrastructure services..."
     cd "$INSTALL_DIR"
     docker compose up -d
-    info "Waiting for postgres, redis, minio to be healthy..."
+    info "Waiting for postgres and redis to be healthy..."
     local attempts=0
-    until docker compose ps | grep -E "healthy" | wc -l | grep -q "3"; do
+    until docker compose ps | grep -c "healthy" | grep -qE "^[2-9]"; do
         attempts=$((attempts+1))
         [ $attempts -ge 60 ] && { warn "Services took too long. Check: docker compose logs"; break; }
         sleep 2
@@ -148,14 +144,16 @@ EOF
     # Open required ports
     if command -v ufw >/dev/null 2>&1; then
         ufw allow 7879/tcp >/dev/null 2>&1 && success "Port 7879 (TCP) opened"
-        ufw allow 7881/tcp >/dev/null 2>&1 && success "Port 7881 (WebDAV) opened"
+        ufw allow 7880/tcp >/dev/null 2>&1 && success "Port 7880 (mgmt) opened"
+        ufw allow 445/tcp  >/dev/null 2>&1 && success "Port 445 (SMB) opened"
     elif command -v firewall-cmd >/dev/null 2>&1; then
         firewall-cmd --permanent --add-port=7879/tcp >/dev/null 2>&1
-        firewall-cmd --permanent --add-port=7881/tcp >/dev/null 2>&1
+        firewall-cmd --permanent --add-port=7880/tcp >/dev/null 2>&1
+        firewall-cmd --permanent --add-port=445/tcp  >/dev/null 2>&1
         firewall-cmd --reload >/dev/null 2>&1
-        success "Ports 7879, 7881 opened (firewalld)"
+        success "Ports 7879, 7880, 445 opened (firewalld)"
     else
-        warn "Firewall not detected — make sure ports 7879 and 7881 are open"
+        warn "Firewall not detected — make sure ports 7879, 7880, 445 are open"
     fi
 }
 
@@ -226,7 +224,8 @@ main() {
             echo
             echo -e "${YELLOW}⚠${RESET}  Open firewall ports if needed:"
             echo -e "     ${BLUE}ufw allow 7879/tcp   # TCP (pairing + RPC)${RESET}"
-            echo -e "     ${BLUE}ufw allow 7881/tcp   # WebDAV (disk mount)${RESET}"
+            echo -e "     ${BLUE}ufw allow 7880/tcp   # Management API${RESET}"
+            echo -e "     ${BLUE}ufw allow 445/tcp    # SMB (disk mount)${RESET}"
             echo
             ;;
     esac

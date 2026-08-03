@@ -32,10 +32,10 @@ services:
   samba:
     image: dperson/samba
     ports:
-      - "127.0.0.1:445:445"
-      - "127.0.0.1:139:139"
+      - "0.0.0.0:445:445"
+      - "0.0.0.0:139:139"
     volumes:
-      - diskwave_data:/mount/diskwave
+      - /opt/diskwave/data:/mount/diskwave
     command: >
       -u "diskwave;diskwave123"
       -s "diskwave;/mount/diskwave;yes;no;no;diskwave"
@@ -44,4 +44,3 @@ services:
 volumes:
   pgdata:
   redisdata:
-  diskwave_data:
