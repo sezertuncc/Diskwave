@@ -194,18 +194,21 @@ EOF
     success "Diskwave service started (auto-start on boot enabled)"
 
     # Open required ports
+    # Note: 445 (SMB) and 7880 (mgmt) are intentionally NOT opened —
+    #   SMB is tunneled through the TLS connection on 7879 (never direct internet exposure)
+    #   mgmt API binds to 127.0.0.1 only (localhost, no external access needed)
     if command -v ufw >/dev/null 2>&1; then
-        ufw allow 7879/tcp >/dev/null 2>&1 && success "Port 7879 (TCP) opened"
-        ufw allow 7880/tcp >/dev/null 2>&1 && success "Port 7880 (mgmt) opened"
-        ufw allow 445/tcp  >/dev/null 2>&1 && success "Port 445 (SMB) opened"
+        ufw allow 7879/tcp >/dev/null 2>&1 && success "Port 7879 (TCP+TLS) opened"
+        ufw delete allow 7880/tcp >/dev/null 2>&1 || true   # mgmt → localhost only
+        ufw delete allow 445/tcp  >/dev/null 2>&1 || true   # SMB  → tunneled, not direct
     elif command -v firewall-cmd >/dev/null 2>&1; then
         firewall-cmd --permanent --add-port=7879/tcp >/dev/null 2>&1
-        firewall-cmd --permanent --add-port=7880/tcp >/dev/null 2>&1
-        firewall-cmd --permanent --add-port=445/tcp  >/dev/null 2>&1
+        firewall-cmd --permanent --remove-port=7880/tcp >/dev/null 2>&1 || true
+        firewall-cmd --permanent --remove-port=445/tcp  >/dev/null 2>&1 || true
         firewall-cmd --reload >/dev/null 2>&1
-        success "Ports 7879, 7880, 445 opened (firewalld)"
+        success "Port 7879 opened (firewalld); 7880+445 restricted to localhost"
     else
-        warn "Firewall not detected — make sure ports 7879, 7880, 445 are open"
+        warn "Firewall not detected — make sure port 7879/tcp is open; do NOT open 445 or 7880"
     fi
 }
 
@@ -288,10 +291,9 @@ main() {
             echo -e "  Clients      : ${BLUE}diskwave clients${RESET}"
             echo -e "  Uninstall    : ${BLUE}sudo diskwave uninstall${RESET}"
             echo
-            echo -e "${YELLOW}⚠${RESET}  Open firewall ports if needed:"
-            echo -e "     ${BLUE}ufw allow 7879/tcp   # TCP (pairing + RPC)${RESET}"
-            echo -e "     ${BLUE}ufw allow 7880/tcp   # Management API${RESET}"
-            echo -e "     ${BLUE}ufw allow 445/tcp    # SMB (disk mount)${RESET}"
+            echo -e "${YELLOW}⚠${RESET}  Open firewall port if needed:"
+            echo -e "     ${BLUE}ufw allow 7879/tcp   # TCP+TLS (pairing + RPC + SMB tunnel)${RESET}"
+            echo -e "     ${YELLOW}Do NOT open 445 or 7880 — SMB runs through the tunnel, mgmt is localhost-only${RESET}"
             echo
             ;;
     esac

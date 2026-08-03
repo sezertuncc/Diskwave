@@ -55,7 +55,7 @@ final class AppState: ObservableObject {
         }
         Task.detached {
             do {
-                let mountPath = try await SMBMounter.shared.mount(host: host, creds: creds)
+                let mountPath = try await SMBMounter.shared.mount(host: host, creds: creds, tunnelPort: client.smbLocalPort)
                 await MainActor.run {
                     self.isMounted = true
                     self.mountError = nil

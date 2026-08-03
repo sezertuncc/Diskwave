@@ -95,7 +95,8 @@ func main() {
 	// --- Management API (localhost only) ---
 	mgmtAPI := mgmt.NewAPI(authMgr)
 	go func() {
-		if err := mgmtAPI.ListenAndServe("0.0.0.0:" + cfg.mgmtPort); err != nil {
+		// Bind strictly to loopback — mgmt API must never be reachable from the internet
+		if err := mgmtAPI.ListenAndServe("127.0.0.1:" + cfg.mgmtPort); err != nil {
 			log.Printf("[mgmt] %v", err)
 		}
 	}()

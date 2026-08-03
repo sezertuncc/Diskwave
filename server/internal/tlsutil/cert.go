@@ -4,9 +4,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"math/big"
 	"time"
@@ -59,4 +61,19 @@ func GenerateSelfSigned(nextProtos ...string) (*tls.Config, error) {
 		NextProtos:   nextProtos,
 		MinVersion:   tls.VersionTLS13,
 	}, nil
+}
+
+// CertFingerprint returns the SHA-256 hex fingerprint of the first certificate
+// in a tls.Config. Used for cert pinning: server sends this during pairing,
+// client stores it in Keychain and verifies on every subsequent connection.
+func CertFingerprint(cfg *tls.Config) string {
+	if len(cfg.Certificates) == 0 {
+		return ""
+	}
+	cert := cfg.Certificates[0]
+	if len(cert.Certificate) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(cert.Certificate[0])
+	return hex.EncodeToString(sum[:])
 }

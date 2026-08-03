@@ -32,8 +32,8 @@ services:
   samba:
     image: dperson/samba
     ports:
-      - "0.0.0.0:445:445"
-      - "0.0.0.0:139:139"
+      - "127.0.0.1:445:445"
+      - "127.0.0.1:139:139"
     environment:
       - DISKWAVE_SMB_PASSWORD=${DISKWAVE_SMB_PASSWORD:?DISKWAVE_SMB_PASSWORD must be set}
     volumes:
@@ -56,6 +56,8 @@ services:
       -g "getwd cache = yes"
       -g "server min protocol = SMB2"
       -g "server max protocol = SMB3"
+      -g "smb encrypt = mandatory"
+      -g "server signing = mandatory"
     restart: unless-stopped
 
 volumes:

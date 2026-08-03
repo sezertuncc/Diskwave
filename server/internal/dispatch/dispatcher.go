@@ -20,10 +20,11 @@ type Broadcaster interface {
 
 // Dispatcher holds shared business logic used by both TCP and QUIC transports.
 type Dispatcher struct {
-	AuthMgr   *auth.Manager
-	MetaSvc   *metadata.Service
-	BlockSvc  *blocks.Service
-	Broadcast Broadcaster
+	AuthMgr         *auth.Manager
+	MetaSvc         *metadata.Service
+	BlockSvc        *blocks.Service
+	Broadcast       Broadcaster
+	CertFingerprint string // SHA-256 hex of server TLS cert; included in PairResponse for pinning
 }
 
 // --- Auth ---
@@ -42,8 +43,9 @@ func (d *Dispatcher) HandlePair(env *pb.Envelope) *pb.Envelope {
 		return MakeEnvelope(env.RequestId, pb.MessageType_PAIR_RESPONSE, &pb.PairResponse{})
 	}
 	return MakeEnvelope(env.RequestId, pb.MessageType_PAIR_RESPONSE, &pb.PairResponse{
-		JwtToken:   token,
-		ServerName: "Diskwave",
+		JwtToken:        token,
+		ServerName:      "Diskwave",
+		CertFingerprint: d.CertFingerprint,
 	})
 }
 

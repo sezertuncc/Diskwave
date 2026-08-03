@@ -20,7 +20,7 @@ final class SMBMounter {
     private var mountPoint: String { "/Volumes/\(volumeName)" }
     private(set) var currentMountPath: String?
 
-    func mount(host: String, creds: SMBCredentials) async throws -> String {
+    func mount(host: String, creds: SMBCredentials, tunnelPort: UInt16? = nil) async throws -> String {
         await unmount()
 
         let fm = FileManager.default
@@ -31,8 +31,20 @@ final class SMBMounter {
         // Write /etc/nsmb.conf tuning before mount (requires root or existing file)
         applyNSMBConf()
 
+        // When a tunnel is active, mount via localhost:<tunnelPort> so SMB traffic
+        // never leaves the TLS connection. Fall back to direct mount only if no tunnel.
+        let mountHost: String
+        let mountPort: Int
+        if let port = tunnelPort, port > 0 {
+            mountHost = "127.0.0.1"
+            mountPort = Int(port)
+        } else {
+            mountHost = host
+            mountPort = creds.port
+        }
+
         // //username:password@host:port/share
-        let url = "//\(creds.username):\(creds.password)@\(host):\(creds.port)/\(creds.share)"
+        let url = "//\(creds.username):\(creds.password)@\(mountHost):\(mountPort)/\(creds.share)"
 
         // mount_smbfs on modern macOS does not accept -o tuning flags.
         // All perf tuning lives in /etc/nsmb.conf (written by applyNSMBConf above).

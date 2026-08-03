@@ -4,10 +4,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math/big"
-	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,7 @@ type Manager struct {
 	codeExpires time.Time
 	clients     map[string]ClientRecord // clientID → record
 	revoked     map[string]struct{}     // revoked clientIDs
+	deviceCreds map[string]SMBCredentials // clientID → per-device SMB credentials
 }
 
 func NewManager() (*Manager, error) {
@@ -51,10 +53,11 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("generate keypair: %w", err)
 	}
 	m := &Manager{
-		privateKey: priv,
-		publicKey:  pub,
-		clients:    make(map[string]ClientRecord),
-		revoked:    make(map[string]struct{}),
+		privateKey:  priv,
+		publicKey:   pub,
+		clients:     make(map[string]ClientRecord),
+		revoked:     make(map[string]struct{}),
+		deviceCreds: make(map[string]SMBCredentials),
 	}
 	if err := m.rotateCode(); err != nil {
 		return nil, err
@@ -170,22 +173,64 @@ func (m *Manager) RevokeClient(_ context.Context, clientID string) {
 	defer m.mu.Unlock()
 	m.revoked[clientID] = struct{}{}
 	delete(m.clients, clientID)
+
+	// Remove per-device SMB user from Samba so unpair truly revokes disk access
+	if creds, ok := m.deviceCreds[clientID]; ok {
+		delete(m.deviceCreds, clientID)
+		go func(username string) {
+			if err := exec.Command("docker", "exec", "diskwave-samba-1",
+				"smbpasswd", "-x", username).Run(); err != nil {
+				// Non-fatal: container may already be gone, log and continue
+				fmt.Printf("[auth] warn: could not remove samba user %s: %v\n", username, err)
+			}
+		}(creds.Username)
+	}
 }
 
-// SMBCredsFor returns the Samba credentials the client needs to mount the share.
-// Password is read from DISKWAVE_SMB_PASSWORD env var; falls back to a build-time
-// default only for development. Set this env var in production.
-func (m *Manager) SMBCredsFor(_ string) SMBCredentials {
-	password := os.Getenv("DISKWAVE_SMB_PASSWORD")
-	if password == "" {
-		password = "changeme-set-DISKWAVE_SMB_PASSWORD"
+// SMBCredsFor returns per-device Samba credentials, generating and registering
+// a new user on first call for a given clientID. This ensures unpair truly
+// revokes SMB access — each device gets its own username+password.
+func (m *Manager) SMBCredsFor(clientID string) SMBCredentials {
+	m.mu.Lock()
+	if creds, ok := m.deviceCreds[clientID]; ok {
+		m.mu.Unlock()
+		return creds
 	}
-	return SMBCredentials{
+	m.mu.Unlock()
+
+	// Derive a deterministic but unguessable username from clientID
+	h := sha256.Sum256([]byte(clientID))
+	username := "dw_" + hex.EncodeToString(h[:6]) // 15 chars total
+
+	// Generate a random per-device password
+	pwBytes := make([]byte, 16)
+	_, _ = rand.Read(pwBytes)
+	password := hex.EncodeToString(pwBytes)
+
+	// Register the user inside the Samba container:
+	//   printf '%s\n%s\n' <pass> <pass> | smbpasswd -a -s <user>
+	go func(u, p string) {
+		input := fmt.Sprintf("%s\n%s\n", p, p)
+		cmd := exec.Command("docker", "exec", "-i", "diskwave-samba-1",
+			"smbpasswd", "-a", "-s", u)
+		cmd.Stdin = strings.NewReader(input)
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("[auth] warn: could not add samba user %s: %v\n", u, err)
+		}
+	}(username, password)
+
+	creds := SMBCredentials{
 		Port:     445,
 		Share:    "diskwave",
-		Username: "diskwave",
+		Username: username,
 		Password: password,
 	}
+
+	m.mu.Lock()
+	m.deviceCreds[clientID] = creds
+	m.mu.Unlock()
+
+	return creds
 }
 
 func generateCode() (string, error) {

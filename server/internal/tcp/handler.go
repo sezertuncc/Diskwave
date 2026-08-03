@@ -22,8 +22,8 @@ import (
 type Handler struct {
 	disp *dispatch.Dispatcher
 
-	mu      sync.RWMutex
-	conns   map[net.Conn]string // conn → clientID (authenticated connections)
+	mu    sync.RWMutex
+	conns map[net.Conn]string // conn → clientID (authenticated connections)
 }
 
 func NewHandler(a *auth.Manager, m *metadata.Service, b *blocks.Service) *Handler {
@@ -62,6 +62,8 @@ func (h *Handler) ListenAndServe(addr string) error {
 	if err != nil {
 		return fmt.Errorf("tcp tls config: %w", err)
 	}
+
+	h.disp.CertFingerprint = tlsutil.CertFingerprint(tlsConf)
 
 	ln, err := tls.Listen("tcp", addr, tlsConf)
 	if err != nil {
@@ -125,6 +127,18 @@ func (h *Handler) handleConn(conn net.Conn) {
 				break
 			}
 			switch env.Type {
+			case pb.MessageType_TUNNEL_OPEN_REQUEST:
+				// Upgrade this connection to an SMB tunnel.
+				// Send the response, then hand off raw bytes between client and Samba.
+				openResp := dispatch.MakeEnvelope(env.RequestId, pb.MessageType_TUNNEL_OPEN_RESPONSE,
+					&pb.TunnelOpenResponse{Ok: true})
+				if err := writeEnvelope(conn, openResp); err != nil {
+					log.Printf("[tcp/tunnel] send open response: %v", err)
+					return
+				}
+				h.runSMBTunnel(conn)
+				return // connection is consumed by the tunnel goroutine
+
 			case pb.MessageType_STAT_REQUEST:
 				resp = h.disp.HandleStat(ctx, env)
 			case pb.MessageType_READDIR_REQUEST:
@@ -158,6 +172,29 @@ func (h *Handler) handleConn(conn net.Conn) {
 			}
 		}
 	}
+}
+
+// runSMBTunnel dials Samba on localhost and pipes raw bytes between the TLS
+// client connection and Samba. The caller must not touch conn after this call.
+func (h *Handler) runSMBTunnel(conn net.Conn) {
+	samba, err := net.Dial("tcp", "127.0.0.1:445")
+	if err != nil {
+		log.Printf("[tcp/tunnel] dial samba: %v", err)
+		return
+	}
+	defer samba.Close()
+
+	log.Printf("[tcp/tunnel] SMB tunnel open for %s", conn.RemoteAddr())
+	done := make(chan struct{}, 2)
+	copy := func(dst, src net.Conn) {
+		io.Copy(dst, src) //nolint:errcheck
+		dst.Close()
+		done <- struct{}{}
+	}
+	go copy(samba, conn)
+	go copy(conn, samba)
+	<-done
+	log.Printf("[tcp/tunnel] SMB tunnel closed for %s", conn.RemoteAddr())
 }
 
 func (h *Handler) isAuthorized(conn net.Conn) bool {

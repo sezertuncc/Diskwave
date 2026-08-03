@@ -13,6 +13,18 @@ message PairRequest {
 message PairResponse {
   string jwt_token = 1;
   string server_name = 2;
+  string cert_fingerprint = 3; // SHA-256 hex of server TLS cert, for pinning
+}
+
+// --- SMB Tunnel ---
+
+message TunnelOpenRequest {}   // client → server: open SMB tunnel to 127.0.0.1:445
+message TunnelOpenResponse {
+  bool ok = 1;
+  string error = 2;
+}
+message TunnelData {
+  bytes data = 1;              // raw SMB bytes, bidirectional
 }
 
 message ConnectRequest {
@@ -168,6 +180,9 @@ enum MessageType {
   INVALIDATE = 22;
   SET_SIZE_REQUEST = 23;
   SET_SIZE_RESPONSE = 24;
+  TUNNEL_OPEN_REQUEST = 25;
+  TUNNEL_OPEN_RESPONSE = 26;
+  TUNNEL_DATA = 27;
 }
 
 message Envelope {
