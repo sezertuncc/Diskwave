@@ -15,24 +15,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── macFUSE headers (build-time only, no kernel ext needed) ──────────
-      - name: Install macFUSE
-        run: |
-          brew install --cask macfuse || true
-          # If cask install skipped (already present or needs restart),
-          # fall back to extracting just the headers from the DMG.
-          if [ ! -f /usr/local/include/fuse/fuse.h ]; then
-            MACFUSE_URL="https://github.com/osxfuse/osxfuse/releases/download/macfuse-4.7.2/macfuse-4.7.2.dmg"
-            curl -fsSL "$MACFUSE_URL" -o /tmp/macfuse.dmg
-            hdiutil attach /tmp/macfuse.dmg -nobrowse -quiet
-            # Extract headers from the package payload
-            pkgutil --expand-full "/Volumes/macFUSE/Install macFUSE.pkg" /tmp/macfuse_pkg || true
-            sudo mkdir -p /usr/local/include/fuse /usr/local/lib
-            sudo find /tmp/macfuse_pkg -name "*.h" -exec cp {} /usr/local/include/fuse/ \; 2>/dev/null || true
-            sudo find /tmp/macfuse_pkg -name "libfuse*.dylib" -exec cp {} /usr/local/lib/ \; 2>/dev/null || true
-            hdiutil detach "/Volumes/macFUSE" -quiet || true
-          fi
-
       # ── Xcode version ────────────────────────────────────────────────────
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_15.4.app
