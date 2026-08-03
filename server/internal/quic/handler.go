@@ -128,10 +128,11 @@ func (h *Handler) handleStream(conn *quiclib.Conn, stream *quiclib.Stream) {
 
 	ctx := context.Background()
 	var resp *pb.Envelope
+	remote := conn.RemoteAddr().String()
 
 	switch env.Type {
 	case pb.MessageType_PAIR_REQUEST:
-		resp = h.disp.HandlePair(env)
+		resp = h.disp.HandlePair(env, remote)
 
 	case pb.MessageType_CONNECT_REQUEST:
 		var clientID string

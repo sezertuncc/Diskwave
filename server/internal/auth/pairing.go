@@ -5,9 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"net"
 	"os/exec"
 	"strings"
 	"sync"
@@ -19,6 +21,16 @@ import (
 const codeChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no 0/O/1/I confusion
 const codeLen = 6
 const codeExpiry = 10 * time.Minute
+
+const (
+	rateLimitMaxFailures = 5
+	rateLimitBlockDur    = 5 * time.Minute
+)
+
+type ipRecord struct {
+	failures  int
+	blockedAt time.Time
+}
 
 type ClientRecord struct {
 	ID          string    `json:"id"`
@@ -42,27 +54,125 @@ type Manager struct {
 	mu          sync.Mutex
 	currentCode string
 	codeExpires time.Time
-	clients     map[string]ClientRecord // clientID → record
-	revoked     map[string]struct{}     // revoked clientIDs
-	deviceCreds map[string]SMBCredentials // clientID → per-device SMB credentials
+	clients     map[string]ClientRecord    // clientID → record
+	revoked     map[string]struct{}        // revoked clientIDs
+	deviceCreds map[string]SMBCredentials  // clientID → per-device SMB credentials
+	ipLimits    map[string]*ipRecord       // remoteIP → failure tracking
 }
 
-func NewManager() (*Manager, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("generate keypair: %w", err)
-	}
+// NewManager creates an auth manager. If db is non-nil, the Ed25519 keypair is
+// persisted in PostgreSQL so JWT tokens survive server restarts.
+func NewManager(db *sql.DB) (*Manager, error) {
 	m := &Manager{
-		privateKey:  priv,
-		publicKey:   pub,
 		clients:     make(map[string]ClientRecord),
 		revoked:     make(map[string]struct{}),
 		deviceCreds: make(map[string]SMBCredentials),
+		ipLimits:    make(map[string]*ipRecord),
 	}
+
+	if db != nil {
+		if err := m.loadOrCreateKeypair(db); err != nil {
+			return nil, err
+		}
+	} else {
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("generate keypair: %w", err)
+		}
+		m.privateKey = priv
+		m.publicKey = pub
+	}
+
 	if err := m.rotateCode(); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// loadOrCreateKeypair loads the Ed25519 keypair from the DB, creating it if absent.
+func (m *Manager) loadOrCreateKeypair(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS diskwave_keypair (
+		id      INTEGER PRIMARY KEY DEFAULT 1,
+		privkey BYTEA NOT NULL,
+		CHECK (id = 1)
+	)`)
+	if err != nil {
+		return fmt.Errorf("create keypair table: %w", err)
+	}
+
+	var privBytes []byte
+	err = db.QueryRow(`SELECT privkey FROM diskwave_keypair WHERE id = 1`).Scan(&privBytes)
+	if err == sql.ErrNoRows {
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return fmt.Errorf("generate keypair: %w", err)
+		}
+		if _, err := db.Exec(`INSERT INTO diskwave_keypair (id, privkey) VALUES (1, $1)`, []byte(priv)); err != nil {
+			return fmt.Errorf("persist keypair: %w", err)
+		}
+		m.privateKey = priv
+		m.publicKey = pub
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load keypair: %w", err)
+	}
+	priv := ed25519.PrivateKey(privBytes)
+	m.privateKey = priv
+	m.publicKey = priv.Public().(ed25519.PublicKey)
+	return nil
+}
+
+// CheckPairRateLimit returns true (allowed) or false (blocked) for remoteAddr.
+func (m *Manager) CheckPairRateLimit(remoteAddr string) bool {
+	ip, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		ip = remoteAddr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec := m.ipLimits[ip]
+	if rec == nil {
+		return true
+	}
+	if !rec.blockedAt.IsZero() {
+		if time.Since(rec.blockedAt) < rateLimitBlockDur {
+			return false
+		}
+		delete(m.ipLimits, ip)
+	}
+	return true
+}
+
+// RecordPairFailure increments the failure counter; blocks after rateLimitMaxFailures.
+func (m *Manager) RecordPairFailure(remoteAddr string) {
+	ip, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		ip = remoteAddr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec := m.ipLimits[ip]
+	if rec == nil {
+		rec = &ipRecord{}
+		m.ipLimits[ip] = rec
+	}
+	rec.failures++
+	if rec.failures >= rateLimitMaxFailures {
+		rec.blockedAt = time.Now()
+		fmt.Printf("[auth] rate-limit: blocked %s for %v\n", ip, rateLimitBlockDur)
+	}
+}
+
+// RecordPairSuccess resets the failure counter on a successful pairing.
+func (m *Manager) RecordPairSuccess(remoteAddr string) {
+	ip, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		ip = remoteAddr
+	}
+	m.mu.Lock()
+	delete(m.ipLimits, ip)
+	m.mu.Unlock()
 }
 
 func (m *Manager) rotateCode() error {

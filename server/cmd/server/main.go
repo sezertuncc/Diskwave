@@ -59,7 +59,8 @@ func main() {
 	log.Printf("[cache] Connected to Redis: %s", cfg.redisAddr)
 
 	// --- Services ---
-	authMgr, err := auth.NewManager()
+	// Pass db so the Ed25519 keypair is persisted — JWT tokens survive restarts
+	authMgr, err := auth.NewManager(db)
 	if err != nil {
 		log.Fatalf("auth manager: %v", err)
 	}

@@ -29,19 +29,32 @@ type Dispatcher struct {
 
 // --- Auth ---
 
-func (d *Dispatcher) HandlePair(env *pb.Envelope) *pb.Envelope {
-	var req pb.PairRequest
-	if err := proto.Unmarshal(env.Payload, &req); err != nil {
+// HandlePair validates the pairing code and issues a JWT. remoteAddr is used
+// for rate-limiting: after 5 consecutive failures the IP is blocked for 5 min.
+func (d *Dispatcher) HandlePair(env *pb.Envelope, remoteAddr string) *pb.Envelope {
+	fail := func() *pb.Envelope {
+		d.AuthMgr.RecordPairFailure(remoteAddr)
 		return MakeEnvelope(env.RequestId, pb.MessageType_PAIR_RESPONSE, &pb.PairResponse{})
 	}
-	if !d.AuthMgr.ValidateCode(req.Code) {
+
+	if !d.AuthMgr.CheckPairRateLimit(remoteAddr) {
+		log.Printf("[auth] rate-limited pair attempt from %s", remoteAddr)
 		return MakeEnvelope(env.RequestId, pb.MessageType_PAIR_RESPONSE, &pb.PairResponse{})
+	}
+
+	var req pb.PairRequest
+	if err := proto.Unmarshal(env.Payload, &req); err != nil {
+		return fail()
+	}
+	if !d.AuthMgr.ValidateCode(req.Code) {
+		return fail()
 	}
 	clientID := auth.NewClientID()
 	token, err := d.AuthMgr.IssueToken(clientID)
 	if err != nil {
-		return MakeEnvelope(env.RequestId, pb.MessageType_PAIR_RESPONSE, &pb.PairResponse{})
+		return fail()
 	}
+	d.AuthMgr.RecordPairSuccess(remoteAddr)
 	return MakeEnvelope(env.RequestId, pb.MessageType_PAIR_RESPONSE, &pb.PairResponse{
 		JwtToken:        token,
 		ServerName:      "Diskwave",
