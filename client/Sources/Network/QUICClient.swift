@@ -196,7 +196,13 @@ final class QUICClient: ObservableObject, @unchecked Sendable {
             host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: port) ?? 7879
         )
-        let conn = NWConnection(to: endpoint, using: .tcp)
+        // Server uses TLS with a self-signed cert; disable hostname/chain verification.
+        let tlsOptions = NWProtocolTLS.Options()
+        sec_protocol_options_set_verify_block(tlsOptions.securityProtocolOptions, { _, _, sec_complete in
+            sec_complete(true)  // accept self-signed
+        }, queue)
+        let params = NWParameters(tls: tlsOptions)
+        let conn = NWConnection(to: endpoint, using: params)
 
         return try await withCheckedThrowingContinuation { continuation in
             let once = OnceFlag()
