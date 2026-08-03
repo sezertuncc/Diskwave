@@ -121,9 +121,13 @@ prompt_smb_password() {
         done
         GENERATED_PASSWORD=0
     else
-        # Non-interactive (piped curl | bash) — generate a cryptographically random password
-        SMB_PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 28 || \
-                       od -An -tx1 /dev/urandom | tr -d ' \n' | head -c 28)
+        # Non-interactive (piped curl | bash) — generate a cryptographically random password.
+        # Avoid tr|head pipelines — they trigger SIGPIPE under set -o pipefail.
+        if command -v openssl >/dev/null 2>&1; then
+            SMB_PASSWORD=$(openssl rand -hex 14)   # 28 hex chars, no pipes needed
+        else
+            SMB_PASSWORD=$(dd if=/dev/urandom bs=14 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+        fi
         GENERATED_PASSWORD=1
     fi
 }
