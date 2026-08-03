@@ -5,6 +5,12 @@ server/diskwave
 
 # macOS
 .DS_Store
+appicon.png
+
+# Internal dev notes — not for public repo
+DEVLOG.md
+NOTES.md
+TODO.md
 
 # Xcode
 client/*.xcodeproj/xcuserdata/
